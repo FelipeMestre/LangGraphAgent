@@ -5,6 +5,7 @@ from functools import lru_cache
 
 from src.adapters.output.api.requests_repository import RequestsApiRepository
 from src.adapters.output.database.sqlalchemy_repository import SqlAlchemyDatabaseRepository
+from src.adapters.output.oauth2.requests_oauth2_provider import RequestsOAuth2Provider
 from src.agents.api_agent.graph import ApiAgentRunner
 from src.agents.common.llm_factory import build_default_llm
 from src.agents.database_agent.graph import DatabaseAgentRunner
@@ -16,10 +17,21 @@ from src.domain.services.schema_analyzer import SchemaAnalyzer
 
 
 @lru_cache(maxsize=1)
+def create_oauth2_provider() -> RequestsOAuth2Provider:
+  """Create a singleton OAuth2 token provider."""
+  return RequestsOAuth2Provider()
+
+
+@lru_cache(maxsize=1)
 def create_query_service():
+  """Create the fully wired QueryService with all dependencies.
+  
+  Includes OAuth2 support for API authentication.
+  """
   llm = build_default_llm()
   database_repository = SqlAlchemyDatabaseRepository()
   api_repository = RequestsApiRepository()
+  oauth2_provider = create_oauth2_provider()
   schema_analyzer = SchemaAnalyzer()
   data_analyzer = DataAnalyzer()
 
@@ -36,6 +48,9 @@ def create_query_service():
   )
 
   database_handler = DatabaseQueryHandler(database_runner)
-  api_handler = ApiQueryHandler(api_runner)
+  api_handler = ApiQueryHandler(
+    agent_runner=api_runner,
+    oauth2_provider=oauth2_provider,
+  )
 
   return QueryServiceImpl(database_handler, api_handler)

@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
 
+from src.domain.value_objects.oauth2_credentials import OAuth2Config
+
 
 class AuthType(str, Enum):
   """Supported authentication types."""
@@ -12,20 +14,35 @@ class AuthType(str, Enum):
   BEARER = 'bearer'
   API_KEY = 'api_key'
   BASIC = 'basic'
+  OAUTH2 = 'oauth2'
 
 
 @dataclass(frozen=True)
 class AuthConfig:
-  """Authentication configuration."""
+  """Authentication configuration.
+  
+  Supports static credentials (bearer, api_key, basic) and OAuth2.
+  For OAuth2, provide oauth2_config and the system will handle token
+  lifecycle automatically.
+  """
   auth_type: AuthType = AuthType.NONE
   token: Optional[str] = None
   api_key: Optional[str] = None
   api_key_header: str = 'X-API-Key'
   username: Optional[str] = None
   password: Optional[str] = None
+  oauth2_config: Optional[OAuth2Config] = None
+
+  def __post_init__(self) -> None:
+    if self.auth_type == AuthType.OAUTH2 and not self.oauth2_config:
+      raise ValueError('oauth2_config is required when auth_type is OAUTH2')
 
   def to_headers(self) -> Dict[str, str]:
-    """Convert auth config to HTTP headers."""
+    """Convert auth config to HTTP headers.
+    
+    Note: For OAuth2, headers should be obtained through the OAuth2TokenProvider
+    after token exchange. This method returns empty dict for OAuth2.
+    """
     headers: Dict[str, str] = {}
 
     if self.auth_type == AuthType.BEARER and self.token:
@@ -36,13 +53,24 @@ class AuthConfig:
       import base64
       credentials = base64.b64encode(f'{self.username}:{self.password}'.encode()).decode()
       headers['Authorization'] = f'Basic {credentials}'
+    # OAuth2 headers are handled separately by the token provider
 
     return headers
+
+  @property
+  def requires_oauth2_flow(self) -> bool:
+    """Check if this config requires OAuth2 token exchange."""
+    return self.auth_type == AuthType.OAUTH2 and self.oauth2_config is not None
 
 
 @dataclass(frozen=True)
 class ApiQueryCommand:
-  """Command for querying an API with natural language."""
+  """Command for querying an API with natural language.
+  
+  This command is interface-agnostic - the same structure works for
+  CLI, API, and web interfaces. OAuth2 configuration is passed through
+  AuthConfig and token management is handled by the application layer.
+  """
   swagger_url: str
   user_query: str
   auth_config: AuthConfig = field(default_factory=AuthConfig)
@@ -58,8 +86,17 @@ class ApiQueryCommand:
       raise ValueError('max_endpoints must be between 1 and 20')
 
   def get_headers(self) -> Dict[str, str]:
-    """Get combined headers from auth and extra headers."""
+    """Get combined headers from auth and extra headers.
+    
+    Note: For OAuth2, this returns only extra_headers. OAuth2 auth headers
+    must be obtained through the OAuth2TokenProvider and merged separately.
+    """
     headers = self.auth_config.to_headers()
     if self.extra_headers:
       headers.update(self.extra_headers)
     return headers
+
+  @property
+  def requires_oauth2(self) -> bool:
+    """Check if this command requires OAuth2 authentication."""
+    return self.auth_config.requires_oauth2_flow
