@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import re
+from typing import List
 from urllib.parse import quote
 
 import streamlit as st
 
 from src.application.commands.api_query_command import ApiQueryCommand, AuthConfig, AuthType
 from src.application.commands.database_query_command import DatabaseQueryCommand
+from src.domain.value_objects.oauth2_credentials import OAuth2Config, OAuth2GrantType
 from src.ports.input.query_service import QueryService
 from src.ports.input.result_presenter import ResultPresenter
 
@@ -92,12 +94,13 @@ class StreamlitAdapter:
     with st.expander('🔐 Autenticación (opcional)', expanded=False):
       auth_type = st.selectbox(
         'Tipo de autenticación',
-        options=['none', 'bearer', 'api_key', 'basic'],
+        options=['none', 'bearer', 'api_key', 'basic', 'oauth2'],
         format_func=lambda x: {
           'none': 'Sin autenticación',
           'bearer': 'Bearer Token (JWT)',
           'api_key': 'API Key',
           'basic': 'Basic Auth (usuario/contraseña)',
+          'oauth2': '🔑 OAuth2 (Client Credentials / Password)',
         }.get(x, x),
         key='api_auth_type',
       )
@@ -181,4 +184,90 @@ class StreamlitAdapter:
         password=password if password else None,
       )
 
+    elif auth_type == 'oauth2':
+      return self._build_oauth2_config()
+
     return AuthConfig(auth_type=AuthType.NONE)
+
+  def _build_oauth2_config(self) -> AuthConfig:
+    """Build OAuth2 AuthConfig with detailed form."""
+    st.markdown('##### Configuración OAuth2')
+    
+    token_url = st.text_input(
+      'Token URL',
+      key='oauth2_token_url',
+      placeholder='https://auth.example.com/oauth/token',
+      help='URL del endpoint de tokens OAuth2',
+    )
+
+    grant_type = st.selectbox(
+      'Grant Type',
+      options=['client_credentials', 'password'],
+      format_func=lambda x: {
+        'client_credentials': 'Client Credentials (servidor a servidor)',
+        'password': 'Password (usuario y contraseña)',
+      }.get(x, x),
+      key='oauth2_grant_type',
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+      client_id = st.text_input(
+        'Client ID',
+        key='oauth2_client_id',
+        help='ID de la aplicación cliente',
+      )
+    with col2:
+      client_secret = st.text_input(
+        'Client Secret',
+        type='password',
+        key='oauth2_client_secret',
+        help='Secreto de la aplicación cliente',
+      )
+
+    username = None
+    password = None
+    if grant_type == 'password':
+      st.markdown('**Credenciales de usuario:**')
+      col1, col2 = st.columns(2)
+      with col1:
+        username = st.text_input('Usuario', key='oauth2_username')
+      with col2:
+        password = st.text_input('Contraseña', type='password', key='oauth2_password')
+
+    scopes_input = st.text_input(
+      'Scopes (separados por coma)',
+      key='oauth2_scopes',
+      placeholder='read:users, write:products',
+      help='Permisos a solicitar, separados por coma',
+    )
+    scopes: List[str] = [s.strip() for s in scopes_input.split(',') if s.strip()] if scopes_input else []
+
+    audience = st.text_input(
+      'Audience (opcional)',
+      key='oauth2_audience',
+      placeholder='https://api.example.com',
+      help='Audiencia del token (requerido por algunos proveedores como Auth0)',
+    )
+
+    # Validate and build config
+    if not token_url:
+      st.warning('⚠️ Debes proporcionar la Token URL para usar OAuth2')
+      return AuthConfig(auth_type=AuthType.NONE)
+
+    try:
+      oauth2_config = OAuth2Config(
+        token_url=token_url,
+        grant_type=OAuth2GrantType(grant_type),
+        client_id=client_id if client_id else None,
+        client_secret=client_secret if client_secret else None,
+        username=username if username else None,
+        password=password if password else None,
+        scopes=scopes,
+        audience=audience if audience else None,
+      )
+      st.success('✅ Configuración OAuth2 válida')
+      return AuthConfig(auth_type=AuthType.OAUTH2, oauth2_config=oauth2_config)
+    except ValueError as e:
+      st.error(f'❌ Error en configuración OAuth2: {e}')
+      return AuthConfig(auth_type=AuthType.NONE)
